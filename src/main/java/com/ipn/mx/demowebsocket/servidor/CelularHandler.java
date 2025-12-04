@@ -63,7 +63,7 @@ public class CelularHandler extends TextWebSocketHandler {
                 sessionToIdMap.put(session, juezIdAsignado);
                 idToSessionMap.put(juezIdAsignado, session);
 
-                System.out.println("Juez conectado con ID: " + juezIdAsignado);
+                System.out.println("✅ Juez conectado con ID: " + juezIdAsignado);
                 send(session, "ESTADO_JUECES:" + juecesSeleccionados.toString());
             }
         }
@@ -75,7 +75,6 @@ public class CelularHandler extends TextWebSocketHandler {
         Integer juezId = sessionToIdMap.get(session);
 
         if (juezId != null) {
-
             idsActivos.remove(juezId);
             sessionToIdMap.remove(session);
             idToSessionMap.remove(juezId);
@@ -84,9 +83,10 @@ public class CelularHandler extends TextWebSocketHandler {
             colorTemp.remove(juezId);
             juecesQueMarcaronIncidencia.remove(juezId);
             juecesSeleccionados.remove(juezId);
+
             broadcast("ESTADO_JUECES:" + juecesSeleccionados.toString());
 
-            System.out.println("Juez desconectado: " + juezId);
+            System.out.println("❌ Juez desconectado: " + juezId);
         }
     }
 
@@ -97,6 +97,7 @@ public class CelularHandler extends TextWebSocketHandler {
         Integer juezId = sessionToIdMap.get(session);
         if (juezId == null) return;
 
+        // ✅ SELECCIÓN DE JUEZ
         if (msg.startsWith("SELECCIONAR_JUEZ:")) {
 
             int juezSeleccionado = Integer.parseInt(
@@ -107,23 +108,25 @@ public class CelularHandler extends TextWebSocketHandler {
 
                 if (juecesSeleccionados.contains(juezSeleccionado)) {
                     send(session, "JUEZ_OCUPADO");
-                    System.out.println("Juez " + juezSeleccionado + " ya ocupado");
+                    System.out.println("⚠️ Juez " + juezSeleccionado + " ya ocupado");
                     return;
                 }
 
                 juecesSeleccionados.add(juezSeleccionado);
-                System.out.println("Juez " + juezSeleccionado + " seleccionado por sesión " + juezId);
+                System.out.println("✅ Juez " + juezSeleccionado + " seleccionado por sesión " + juezId);
             }
 
             broadcast("ESTADO_JUECES:" + juecesSeleccionados.toString());
             return;
         }
 
+        // ✅ PUNTUACIÓN
         if (msg.startsWith("PUNTUAR:")) {
 
             String[] partes = msg.replace("PUNTUAR:", "").split(",");
             int puntos = Integer.parseInt(partes[0]);
             String color = partes[1];
+
             if (puntos < 0 || puntos > 5) {
                 send(session, "ERROR:PUNTOS_INVALIDOS");
                 return;
@@ -135,17 +138,23 @@ public class CelularHandler extends TextWebSocketHandler {
             broadcast("PUNTAJE:" + juezId + "," + puntos + "," + color);
             celularService.guardarPuntaje(juezId, puntos, color, combateIdActual);
 
-            System.out.println("Puntaje: Juez " + juezId + " → " + puntos + " pts " + color);
+            System.out.println("✅ Puntaje: Juez " + juezId + " → " + puntos + " pts " + color);
 
             calcularYEnviarPromedio(color);
-
             return;
         }
 
-        if (msg.equals("INCIDENCIA")) {
+        // ✅✅✅ INCIDENCIA CORREGIDA (AHORA CON TIPO Y RESPUESTA)
+        if (msg.startsWith("INCIDENCIA:")) {
+
+            String tipo = msg.replace("INCIDENCIA:", "").trim();
 
             synchronized (juecesQueMarcaronIncidencia) {
-                if (juecesQueMarcaronIncidencia.contains(juezId)) return;
+
+                if (juecesQueMarcaronIncidencia.contains(juezId)) {
+                    send(session, "INCIDENCIA_ERROR");
+                    return;
+                }
 
                 juecesQueMarcaronIncidencia.add(juezId);
                 incidenciasTemp++;
@@ -153,17 +162,23 @@ public class CelularHandler extends TextWebSocketHandler {
                 broadcast("INCIDENCIAS:" + incidenciasTemp);
                 celularService.guardarIncidencia(juezId, combateIdActual);
 
-                System.out.println("Incidencia: Juez " + juezId + " (Total: " + incidenciasTemp + ")");
+                System.out.println("🚨 Incidencia: Juez " + juezId +
+                        " | Tipo: " + tipo +
+                        " | Total: " + incidenciasTemp);
+
+                // ✅ CONFIRMACIÓN A KIVY
+                send(session, "INCIDENCIA_OK");
 
                 if (juecesQueMarcaronIncidencia.size() >= 2) {
                     broadcast("HABILITAR_PUNTOS");
                     celularService.registrarAdvertencia(combateIdActual);
-                    System.out.println("Habilitando botones de puntos (2+ incidencias)");
+                    System.out.println("✅ Habilitando botones de puntos (2+ incidencias)");
                 }
             }
             return;
         }
 
+        // ✅ RESET
         if (msg.equals("RESET")) {
 
             puntosTemp.clear();
@@ -172,7 +187,7 @@ public class CelularHandler extends TextWebSocketHandler {
             incidenciasTemp = 0;
 
             broadcast("RESET_COMPLETO");
-            System.out.println("Reset completado");
+            System.out.println("🔄 Reset completado");
         }
     }
 
@@ -197,6 +212,7 @@ public class CelularHandler extends TextWebSocketHandler {
     }
 
     private void calcularYEnviarPromedio(String color) {
+
         int juecesQuePuntuaron = 0;
         int sumaPuntos = 0;
 
@@ -212,24 +228,12 @@ public class CelularHandler extends TextWebSocketHandler {
             }
         }
 
-        System.out.println("Jueces que puntuaron " + color + ": " + juecesQuePuntuaron + "/" + idsActivos.size());
-
         if (juecesQuePuntuaron == idsActivos.size() && juecesQuePuntuaron > 0) {
 
             double promedio = (double) sumaPuntos / juecesQuePuntuaron;
+            int promedioFinal = (int) Math.round(promedio);
 
-            double parteDecimal = promedio - Math.floor(promedio);
-            int promedioFinal;
-
-            if (parteDecimal < 0.5) {
-                promedioFinal = (int) Math.floor(promedio);
-            } else if (parteDecimal >= 0.6) {
-                promedioFinal = (int) Math.ceil(promedio);
-            } else {
-                promedioFinal = (int) Math.round(promedio);
-            }
-
-            System.out.println("Puntos: " + promedioFinal);
+            System.out.println("✅ Promedio final: " + promedioFinal);
 
             celularService.guardarPromedio(color, promedioFinal, combateIdActual);
 
