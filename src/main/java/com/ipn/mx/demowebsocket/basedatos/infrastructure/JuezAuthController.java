@@ -27,6 +27,5 @@ public class JuezAuthController {
         } else {
             System.out.println("Intento de login de Juez HTTP fallido.");
             return ResponseEntity.status(401).body(Map.of("status", "error", "message", "Contraseña de Juez incorrecta"));
-        }
-    }
+        }}
 }
