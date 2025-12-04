@@ -60,5 +60,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
                 .setAllowedOrigins("*");
         r.addHandler(tableroHandler, "/ws/tablero/{combateId}")
                 .setAllowedOrigins("*");
+        //r.addHandler(celularHandler, "/ws/celular/{celularnum}")
+         //       .setAllowedOrigins("*");
     }
 }
