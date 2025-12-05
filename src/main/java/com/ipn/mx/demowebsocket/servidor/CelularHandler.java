@@ -6,7 +6,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.*;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -20,229 +19,192 @@ public class CelularHandler extends TextWebSocketHandler {
         this.celularService = celularService;
     }
 
-    private static final Map<WebSocketSession, Integer> sessionToIdMap = new ConcurrentHashMap<>();
-    private static final Map<Integer, WebSocketSession> idToSessionMap = new ConcurrentHashMap<>();
-    private static final Set<Integer> idsActivos =
-            Collections.synchronizedSet(new HashSet<>());
-
     private static final int MAX_JUECES = 3;
 
-    private static final Set<Integer> juecesSeleccionados =
-            Collections.synchronizedSet(new HashSet<>());
-
+    private static final Map<WebSocketSession, Integer> sessionToIdMap = new ConcurrentHashMap<>();
+    private static final Map<Integer, String> juecesSeleccionados = new ConcurrentHashMap<>();
     private static final Map<Integer, Integer> puntosTemp = new ConcurrentHashMap<>();
     private static final Map<Integer, String> colorTemp = new ConcurrentHashMap<>();
-
-    private static int incidenciasTemp = 0;
-    private static final Set<Integer> juecesQueMarcaronIncidencia =
-            Collections.synchronizedSet(new HashSet<>());
+    private static final Set<Integer> juecesQueMarcaronIncidencia = Collections.synchronizedSet(new HashSet<>());
 
     private static int combateIdActual = 1;
 
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) throws IOException {
-
-        int juezIdAsignado = -1;
-
-        synchronized (idsActivos) {
-
-            if (idsActivos.size() >= MAX_JUECES) {
-                session.close(CloseStatus.SERVICE_OVERLOAD.withReason("Sala llena"));
-                return;
-            }
-
-            for (int i = 1; i <= MAX_JUECES; i++) {
-                if (!idsActivos.contains(i)) {
-                    juezIdAsignado = i;
-                    break;
-                }
-            }
-
-            if (juezIdAsignado != -1) {
-                idsActivos.add(juezIdAsignado);
-                sessionToIdMap.put(session, juezIdAsignado);
-                idToSessionMap.put(juezIdAsignado, session);
-
-                System.out.println("✅ Juez conectado con ID: " + juezIdAsignado);
-                send(session, "ESTADO_JUECES:" + juecesSeleccionados.toString());
-            }
-        }
+    public void afterConnectionEstablished(WebSocketSession session) {
+        sessionToIdMap.put(session, -1);
+        enviarEstadoJueces();
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        Integer juezId = sessionToIdMap.remove(session);
 
-        Integer juezId = sessionToIdMap.get(session);
-
-        if (juezId != null) {
-            idsActivos.remove(juezId);
-            sessionToIdMap.remove(session);
-            idToSessionMap.remove(juezId);
-
+        if (juezId != null && juezId != -1) {
+            juecesSeleccionados.remove(juezId);
             puntosTemp.remove(juezId);
             colorTemp.remove(juezId);
             juecesQueMarcaronIncidencia.remove(juezId);
-            juecesSeleccionados.remove(juezId);
-
-            broadcast("ESTADO_JUECES:" + juecesSeleccionados.toString());
-
-            System.out.println("❌ Juez desconectado: " + juezId);
         }
+
+        enviarEstadoJueces();
     }
 
     @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) {
         String msg = message.getPayload().trim();
-        Integer juezId = sessionToIdMap.get(session);
-        if (juezId == null) return;
 
-        // ✅ SELECCIÓN DE JUEZ
         if (msg.startsWith("SELECCIONAR_JUEZ:")) {
+            String[] partes = msg.replace("SELECCIONAR_JUEZ:", "").split(",");
+            String nombre = partes[0].trim();
+            int posicionDeseada = Integer.parseInt(partes[1].trim());
 
-            int juezSeleccionado = Integer.parseInt(
-                    msg.replace("SELECCIONAR_JUEZ:", "").trim()
-            );
-
-            synchronized (juecesSeleccionados) {
-
-                if (juecesSeleccionados.contains(juezSeleccionado)) {
-                    send(session, "JUEZ_OCUPADO");
-                    System.out.println("⚠️ Juez " + juezSeleccionado + " ya ocupado");
-                    return;
-                }
-
-                juecesSeleccionados.add(juezSeleccionado);
-                System.out.println("✅ Juez " + juezSeleccionado + " seleccionado por sesión " + juezId);
-            }
-
-            broadcast("ESTADO_JUECES:" + juecesSeleccionados.toString());
-            return;
-        }
-
-        // ✅ PUNTUACIÓN
-        if (msg.startsWith("PUNTUAR:")) {
-
-            String[] partes = msg.replace("PUNTUAR:", "").split(",");
-            int puntos = Integer.parseInt(partes[0]);
-            String color = partes[1];
-
-            if (puntos < 0 || puntos > 5) {
-                send(session, "ERROR:PUNTOS_INVALIDOS");
+            if (posicionDeseada < 1 || posicionDeseada > MAX_JUECES) {
+                enviarDirecto(session, "POSICION_INVALIDA");
                 return;
             }
 
-            puntosTemp.put(juezId, puntos);
-            colorTemp.put(juezId, color);
-
-            broadcast("PUNTAJE:" + juezId + "," + puntos + "," + color);
-            celularService.guardarPuntaje(juezId, puntos, color, combateIdActual);
-
-            System.out.println("✅ Puntaje: Juez " + juezId + " → " + puntos + " pts " + color);
-
-            calcularYEnviarPromedio(color);
-            return;
-        }
-
-        // ✅✅✅ INCIDENCIA CORREGIDA (AHORA CON TIPO Y RESPUESTA)
-        if (msg.startsWith("INCIDENCIA:")) {
-
-            String tipo = msg.replace("INCIDENCIA:", "").trim();
-
-            synchronized (juecesQueMarcaronIncidencia) {
-
-                if (juecesQueMarcaronIncidencia.contains(juezId)) {
-                    send(session, "INCIDENCIA_ERROR");
-                    return;
-                }
-
-                juecesQueMarcaronIncidencia.add(juezId);
-                incidenciasTemp++;
-
-                broadcast("INCIDENCIAS:" + incidenciasTemp);
-                celularService.guardarIncidencia(juezId, combateIdActual);
-
-                System.out.println("🚨 Incidencia: Juez " + juezId +
-                        " | Tipo: " + tipo +
-                        " | Total: " + incidenciasTemp);
-
-                // ✅ CONFIRMACIÓN A KIVY
-                send(session, "INCIDENCIA_OK");
-
-                if (juecesQueMarcaronIncidencia.size() >= 2) {
-                    broadcast("HABILITAR_PUNTOS");
-                    celularService.registrarAdvertencia(combateIdActual);
-                    System.out.println("✅ Habilitando botones de puntos (2+ incidencias)");
-                }
+            if (juecesSeleccionados.containsKey(posicionDeseada)) {
+                enviarDirecto(session, "JUEZ_OCUPADO");
+                return;
             }
+
+            juecesSeleccionados.put(posicionDeseada, nombre);
+            sessionToIdMap.put(session, posicionDeseada);
+            enviarEstadoJueces();
             return;
         }
 
-        // ✅ RESET
+        Integer juezId = sessionToIdMap.get(session);
+        if (juezId == null || juezId == -1) return;
+
+        if (msg.startsWith("PUNTUAR:")) {
+            procesarPuntaje(msg, juezId);
+            return;
+        }
+
+        if (msg.startsWith("INCIDENCIA:")) {
+            procesarIncidencia(juezId);
+            return;
+        }
+
         if (msg.equals("RESET")) {
-
-            puntosTemp.clear();
-            colorTemp.clear();
-            juecesQueMarcaronIncidencia.clear();
-            incidenciasTemp = 0;
-
+            resetCompleto();
             broadcast("RESET_COMPLETO");
-            System.out.println("🔄 Reset completado");
         }
     }
 
+    private void procesarPuntaje(String msg, Integer juezId) {
+        String[] partes = msg.replace("PUNTUAR:", "").split(",");
+        String valor = partes[0].trim();
+        String color = partes[1].trim();
+
+        if (valor.equalsIgnoreCase("NULL")) {
+            puntosTemp.put(juezId, -1);
+            colorTemp.put(juezId, color);
+            broadcast("PUNTAJE:" + juezId + ",NULL," + color);
+            celularService.registrarAdvertencia(combateIdActual);
+        } else {
+            int puntos = Integer.parseInt(valor);
+            if (puntos < 1 || puntos > 5) return;
+            puntosTemp.put(juezId, puntos);
+            colorTemp.put(juezId, color);
+            broadcast("PUNTAJE:" + juezId + "," + puntos + "," + color);
+        }
+
+        verificarPromedio();
+    }
+
+    private void procesarIncidencia(Integer juezId) {
+        boolean esNueva = !juecesQueMarcaronIncidencia.contains(juezId);
+
+        if (esNueva) {
+            juecesQueMarcaronIncidencia.add(juezId);
+            celularService.guardarIncidencia(juezId, combateIdActual);
+            System.out.println(">>> Nueva incidencia del juez " + juezId);
+        }
+
+        System.out.println(">>> Total incidencias: " + juecesQueMarcaronIncidencia.size());
+
+        // Siempre verificamos si ya hay 2 o más incidencias
+        if (juecesQueMarcaronIncidencia.size() >= 2) {
+            System.out.println(">>> ENVIANDO HABILITAR_PUNTOS (hay " + juecesQueMarcaronIncidencia.size() + " incidencias)");
+            broadcast("HABILITAR_PUNTOS");
+        } else {
+            System.out.println(">>> NO se habilitan puntos aún (solo " + juecesQueMarcaronIncidencia.size() + " incidencia)");
+        }
+
+        // Confirmamos al juez que su incidencia fue registrada
+        broadcast("INCIDENCIA_REGISTRADA:" + juezId);
+    }
+
+    private void verificarPromedio() {
+        if (puntosTemp.size() != juecesSeleccionados.size()) {
+            System.out.println(">>> Esperando más puntajes (" + puntosTemp.size() + "/" + juecesSeleccionados.size() + ")");
+            return;
+        }
+
+        Set<String> colores = new HashSet<>(colorTemp.values());
+        if (colores.size() != 1) {
+            System.out.println(">>> Colores diferentes detectados, reseteo completo");
+            // Limpiamos TODO incluyendo incidencias cuando hay colores diferentes
+            resetCompleto();
+            broadcast("RESET_COMPLETO");
+            return;
+        }
+
+        int suma = 0;
+        int contador = 0;
+
+        for (Integer puntos : puntosTemp.values()) {
+            if (puntos != -1) {
+                suma += puntos;
+                contador++;
+            }
+        }
+
+        if (contador == 0) {
+            System.out.println(">>> Solo hubo NULLs, reseteo completo");
+            // Si todos marcaron NULL, también reset completo
+            resetCompleto();
+            broadcast("RESET_COMPLETO");
+            return;
+        }
+
+        int promedioFinal = Math.round((float) suma / contador);
+        String colorFinal = colores.iterator().next();
+
+        System.out.println(">>> Promedio calculado: " + promedioFinal + " - " + colorFinal);
+        celularService.guardarPromedio(colorFinal, promedioFinal, combateIdActual);
+
+        resetCompleto();
+        broadcast("RESET_COMPLETO");
+    }
+
+    private void resetCompleto() {
+        puntosTemp.clear();
+        colorTemp.clear();
+        juecesQueMarcaronIncidencia.clear();
+    }
+
+    private void enviarEstadoJueces() {
+        StringBuilder estado = new StringBuilder("ESTADO_JUECES:");
+        juecesSeleccionados.forEach((id, nombre) -> estado.append(id).append("-").append(nombre).append(","));
+        broadcast(estado.toString());
+    }
+
     private void broadcast(String msg) {
-        for (WebSocketSession sesion : idToSessionMap.values()) {
+        for (WebSocketSession sesion : sessionToIdMap.keySet()) {
             try {
                 if (sesion.isOpen()) {
                     sesion.sendMessage(new TextMessage(msg));
                 }
-            } catch (Exception ignored) {
-            }
+            } catch (Exception ignored) {}
         }
     }
 
-    private void send(WebSocketSession session, String msg) {
+    private void enviarDirecto(WebSocketSession sesion, String msg) {
         try {
-            if (session.isOpen()) {
-                session.sendMessage(new TextMessage(msg));
-            }
-        } catch (Exception ignored) {
-        }
-    }
-
-    private void calcularYEnviarPromedio(String color) {
-
-        int juecesQuePuntuaron = 0;
-        int sumaPuntos = 0;
-
-        synchronized (puntosTemp) {
-            for (Integer juezId : idsActivos) {
-                if (puntosTemp.containsKey(juezId) &&
-                        colorTemp.containsKey(juezId) &&
-                        colorTemp.get(juezId).equalsIgnoreCase(color)) {
-
-                    sumaPuntos += puntosTemp.get(juezId);
-                    juecesQuePuntuaron++;
-                }
-            }
-        }
-
-        if (juecesQuePuntuaron == idsActivos.size() && juecesQuePuntuaron > 0) {
-
-            double promedio = (double) sumaPuntos / juecesQuePuntuaron;
-            int promedioFinal = (int) Math.round(promedio);
-
-            System.out.println("✅ Promedio final: " + promedioFinal);
-
-            celularService.guardarPromedio(color, promedioFinal, combateIdActual);
-
-            puntosTemp.clear();
-            colorTemp.clear();
-            juecesQueMarcaronIncidencia.clear();
-            incidenciasTemp = 0;
-
-            broadcast("RESET_COMPLETO");
-        }
+            sesion.sendMessage(new TextMessage(msg));
+        } catch (Exception ignored) {}
     }
 }
