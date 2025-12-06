@@ -8,16 +8,16 @@ public class CelularServiceImpl implements CelularService {
 
     @Override
     public void guardarIncidencia(Integer juezId, Integer combateId) {
-        System.out.println("INCIDENCIA registrada por al menos 2 jueces");
+        System.out.println("INCIDENCIA parar tiempo, ya esta la regla para que sea cuando al menos dos jueces marcaron incidencia");
     }
 
     @Override
     public void registrarAdvertencia(Integer combateId) {
-        System.out.println("Advertencia registrada");
+        System.out.println("solo nulls");
     }
 
     @Override
     public void guardarPromedio(String color, Integer promedioFinal, Integer combateId) {
-        System.out.println("Promedio calculado: " + color + " " + promedioFinal);
+        System.out.println("Puntaje: " + color + " " + promedioFinal);
     }
 }
