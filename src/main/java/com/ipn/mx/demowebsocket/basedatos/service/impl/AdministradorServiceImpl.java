@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
+
 @Service
 public class AdministradorServiceImpl implements AdministradorService {
 
@@ -33,31 +35,34 @@ public class AdministradorServiceImpl implements AdministradorService {
     @Override
     @Transactional
     public Administrador save(Administrador administrador) {
-        // Validaciones de unicidad (create o update)
+        // Validación de unicidad de correo
         if (administrador.getCorreoAdministrador() != null) {
-            boolean existsCorreo = administradorRepository.existsByCorreoAdministrador(administrador.getCorreoAdministrador());
-            // Si viene con id, es update: permitir mismo correo del mismo registro
-            if (existsCorreo) {
-                administradorRepository.findByCorreoAdministrador(administrador.getCorreoAdministrador())
-                        .filter(a -> administrador.getIdAdministrador() != null
-                                && a.getIdAdministrador().equals(administrador.getIdAdministrador()))
-                        .orElseThrow(() -> new IllegalArgumentException("El correo ya está registrado"));
+            Optional<Administrador> existingByCorreo = administradorRepository
+                    .findByCorreoAdministrador(administrador.getCorreoAdministrador());
+
+            if (existingByCorreo.isPresent()) {
+                // Permitir si es el mismo administrador (UPDATE)
+                if (administrador.getIdAdministrador() == null ||
+                        !existingByCorreo.get().getIdAdministrador().equals(administrador.getIdAdministrador())) {
+                    throw new IllegalArgumentException("El correo ya está registrado");
+                }
             }
         }
 
-        // Si usas usuarioAdministrador
+        // Validación de unicidad de usuario
         if (administrador.getUsuarioAdministrador() != null) {
-            boolean existsUser = false;
-            try { existsUser = administradorRepository.existsByUsuarioAdministrador(administrador.getUsuarioAdministrador()); }
-            catch (Exception ignore) {}
-            if (existsUser) {
-                // permitir mismo usuario del mismo registro en update
-                // (si quieres, busca por id aquí igual que con correo)
-                throw new IllegalArgumentException("El usuario ya está registrado");
+            Optional<Administrador> existingByUsuario = administradorRepository
+                    .findByUsuarioAdministrador(administrador.getUsuarioAdministrador());
+
+            if (existingByUsuario.isPresent()) {
+                // Permitir si es el mismo administrador (UPDATE)
+                if (administrador.getIdAdministrador() == null ||
+                        !existingByUsuario.get().getIdAdministrador().equals(administrador.getIdAdministrador())) {
+                    throw new IllegalArgumentException("El usuario ya está registrado");
+                }
             }
         }
 
-        // Hash de contraseña si viene "plana" (no hash)
         String raw = administrador.getContraseniaAdministrador();
         if (raw != null && !raw.isBlank()) {
             // Heurística simple: si no parece BCrypt, hasheamos
